@@ -205,6 +205,26 @@ def extract_platform_from_link(url):
     except Exception:
         return "Unknown"
 
+def find_prices_in_dict(d, found=None):
+    if found is None:
+        found = []
+    if isinstance(d, dict):
+        # Direct check on this dict
+        amount = d.get("amount") or d.get("usdAmount") or d.get("retailPrice") or d.get("salePrice")
+        if amount and isinstance(amount, (int, float, str)) and not isinstance(amount, bool):
+            symbol = d.get("amountWithSymbol") or d.get("symbol") or d.get("currency") or "$"
+            found.append((str(amount), str(symbol)))
+            
+        for k, v in d.items():
+            if isinstance(v, (dict, list)):
+                find_prices_in_dict(v, found)
+            elif k.lower() in ["price", "saleprice", "retailprice", "unitprice", "amount"] and isinstance(v, (int, float, str)) and not isinstance(v, bool):
+                found.append((str(v), k))
+    elif isinstance(d, list):
+        for item in d:
+            find_prices_in_dict(item, found)
+    return found
+
 def scrape_live_price_and_status(url):
     """
     Fetches product URL and extracts:
@@ -284,8 +304,36 @@ def scrape_live_price_and_status(url):
         # --- B. PRICE EXTRACTION ---
         scraped_price = ""
         
-        # 1. Platform Specific Selectors (Amazon)
-        if "amazon." in url.lower():
+        # 1. Shein Specific Script JSON Parser
+        if "shein." in url.lower():
+            for script in soup.find_all("script"):
+                if script.string and any(x in script.string for x in ["goodsDetailV3SsrData", "goodsDetail", "goodsInfo"]):
+                    try:
+                        match = re.search(r'(?:goodsDetailV3SsrData|goodsDetail|goodsInfo)\s*=\s*(\{.*?\})(?:\s*;|\s*\n|\s*</script>)', script.string, re.DOTALL)
+                        if not match:
+                            match = re.search(r'=\s*(\{.*?\});', script.string, re.DOTALL)
+                        if match:
+                            json_data = json.loads(match.group(1))
+                            candidates = find_prices_in_dict(json_data)
+                            for amt, sym in candidates:
+                                amt_clean = re.sub(r"[^\d.]", "", amt)
+                                if amt_clean:
+                                    curr = "$"
+                                    if "₹" in sym or "inr" in sym.lower():
+                                        curr = "₹"
+                                    elif "£" in sym or "gbp" in sym.lower():
+                                        curr = "£"
+                                    elif "€" in sym or "eur" in sym.lower():
+                                        curr = "€"
+                                    scraped_price = f"{curr}{amt_clean}"
+                                    break
+                            if scraped_price:
+                                break
+                    except Exception as parse_err:
+                        log_warning(f"Error parsing Shein JSON: {parse_err}")
+        
+        # 2. Platform Specific Selectors (Amazon)
+        if not scraped_price and "amazon." in url.lower():
             for selector in ["span.a-price span.a-offscreen", "span#price_inside_buybox", "span.apexPriceToPay span.a-offscreen", "span#price"]:
                 el = soup.select_one(selector)
                 if el:
@@ -295,7 +343,7 @@ def scrape_live_price_and_status(url):
                         scraped_price = match.group(1).replace(" ", "")
                         break
                         
-        # 2. General Meta Selectors
+        # 3. General Meta Selectors
         if not scraped_price:
             meta_selectors = [
                 ("property", "og:price:amount"),
@@ -317,7 +365,7 @@ def scrape_live_price_and_status(url):
                         scraped_price = f"{curr} {scraped_price}"
                     break
                     
-        # 3. General JSON-LD
+        # 4. General JSON-LD
         if not scraped_price:
             json_ld = soup.find_all("script", type="application/ld+json")
             for script in json_ld:
@@ -340,7 +388,7 @@ def scrape_live_price_and_status(url):
                 except Exception:
                     continue
                     
-        # 4. General Regex price extraction
+        # 5. General Regex price extraction
         if not scraped_price:
             price_elements = soup.find_all(class_=re.compile("price|amount|val", re.IGNORECASE))
             for el in price_elements:
