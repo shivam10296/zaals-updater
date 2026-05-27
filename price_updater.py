@@ -252,8 +252,11 @@ def scrape_live_price_and_status(url):
                 fetch_url = f"http://api.scraperapi.com?api_key={current_key}&url={urllib.parse.quote(url)}"
                 try:
                     response = requests.get(fetch_url, headers=headers, timeout=15)
+                    resp_lower = response.text.lower() if response.text else ""
+                    has_block = any(term in resp_lower for term in ["captcha", "robot check", "slide to verify", "verify that you are a human", "verify you are human", "security check", "access denied", "please verify"])
+                    
                     # ScraperAPI returns 403 (exceeded limits), 429 (rate limits/concurrency), or 410 (gone) for exhausted keys
-                    if response.status_code in [403, 410, 429]:
+                    if response.status_code in [403, 410, 429] or has_block:
                         if rotate_scraper_key():
                             continue # Try again with the next key!
                     break
@@ -279,7 +282,7 @@ def scrape_live_price_and_status(url):
             return None, "not_found"
             
         # Automatic Proxy Fallback for 403, 503, or CAPTCHAs on other e-commerce sites!
-        if response.status_code in [403, 503, 429] or "captcha" in response.text.lower() or "robot check" in response.text.lower():
+        if response.status_code in [403, 503, 429] or "captcha" in response.text.lower() or "robot check" in response.text.lower() or "slide to verify" in response.text.lower() or "verify that you are a human" in response.text.lower():
             try:
                 proxy_url = f"https://corsproxy.io/?{urllib.parse.quote(url)}"
                 proxy_response = requests.get(proxy_url, headers=headers, timeout=15)
@@ -297,8 +300,8 @@ def scrape_live_price_and_status(url):
         
         # --- A. BOT / CAPTCHA CHECK ---
         # If we hit Amazon's robot check or captcha page, skip stock block and keep active!
-        if "robot check" in page_text.lower() or "captcha" in page_text.lower() or "enter the characters you see below" in page_text.lower():
-            log_warning("Amazon CAPTCHA/Robot check page detected. Skipping price update safely to avoid block.")
+        if any(term in page_text.lower() for term in ["robot check", "captcha", "enter the characters you see below", "slide to verify", "verify that you are a human", "verify you are human", "security check", "access denied", "please verify"]):
+            log_warning("Bot verification/CAPTCHA page detected. Skipping price update safely to avoid block.")
             return None, "active"
             
         # --- B. PRICE EXTRACTION ---
