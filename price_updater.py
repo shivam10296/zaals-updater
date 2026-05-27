@@ -193,14 +193,37 @@ def scrape_live_price_and_status(url):
         "Accept-Language": "en-US,en;q=0.9"
     }
     
+    is_shein = "shein." in url.lower()
+    
     try:
-        response = requests.get(url, headers=headers, timeout=15)
+        import urllib.parse
+        fetch_url = url
+        if is_shein:
+            # Route Shein requests through a free high-reputation CORS proxy to bypass geo-blocks!
+            fetch_url = f"https://corsproxy.io/?{urllib.parse.quote(url)}"
+            
+        response = requests.get(fetch_url, headers=headers, timeout=15)
         
+        # If the proxy failed or returned an error, fallback to direct request
+        if is_shein and response.status_code != 200:
+            fetch_url = url
+            response = requests.get(fetch_url, headers=headers, timeout=15)
+            
         # 1. 404 Explicit dead link check
         if response.status_code == 404:
             return None, "not_found"
             
-        # If server returns error codes (like rate blocks 403, 429, 503), do not delete/block! Skip safely.
+        # Automatic Proxy Fallback for 403, 503, or CAPTCHAs on other e-commerce sites!
+        if response.status_code in [403, 503, 429] or "captcha" in response.text.lower() or "robot check" in response.text.lower():
+            try:
+                proxy_url = f"https://corsproxy.io/?{urllib.parse.quote(url)}"
+                proxy_response = requests.get(proxy_url, headers=headers, timeout=15)
+                if proxy_response.status_code == 200 and "captcha" not in proxy_response.text.lower():
+                    response = proxy_response
+            except Exception:
+                pass
+                
+        # Re-check status after fallback
         if response.status_code in [403, 429, 500, 503]:
             return None, "skipped"
             
