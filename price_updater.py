@@ -10,10 +10,14 @@ from datetime import datetime
 
 # Thread-safe log registry for Gradio status
 _gradio_callback = None
+_telegram_console_buffer = []
 
 def register_callback(cb):
     global _gradio_callback
     _gradio_callback = cb
+
+def log_to_telegram_buffer(msg):
+    _telegram_console_buffer.append(msg)
 
 # Direct print utility for clean console logging
 def log_step(msg):
@@ -30,6 +34,7 @@ def log_success(msg):
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     formatted = f"[{timestamp}] [✔] SUCCESS: {msg}"
     print(formatted)
+    log_to_telegram_buffer(f"🟢 {msg}")
     if _gradio_callback:
         try:
             _gradio_callback(formatted)
@@ -40,6 +45,7 @@ def log_error(msg):
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     formatted = f"[{timestamp}] [✘] ERROR: {msg}"
     print(formatted)
+    log_to_telegram_buffer(f"❌ *ERROR:* {msg}")
     if _gradio_callback:
         try:
             _gradio_callback(formatted)
@@ -50,6 +56,7 @@ def log_warning(msg):
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     formatted = f"[{timestamp}] [⚠] WARNING: {msg}"
     print(formatted)
+    log_to_telegram_buffer(f"⚠️ *WARNING:* {msg}")
     if _gradio_callback:
         try:
             _gradio_callback(formatted)
@@ -661,11 +668,21 @@ def main():
             f"⚡ Back in Stock (Reactivated): `{reactivated_count}`\n"
             f"🔵 Active & Unchanged: `{unchanged_count}`\n"
             f"⚪ Connection Skipped/Safe: `{skipped_count}`\n\n"
-            f"_Database successfully refreshed & synchronized!_"
         )
+        
+        if _telegram_console_buffer:
+            summary_msg += "*📋 Live Action Logs:*\n"
+            # Join up to last 20 logs to avoid character overflow
+            summary_msg += "\n".join(_telegram_console_buffer[-20:])
+            summary_msg += "\n\n"
+            
+        summary_msg += "_Database successfully refreshed & synchronized!_"
+        
         send_telegram_message(summary_msg)
         print("=" * 60)
-        log_success("AUTOMATED DATABASE REFRESH COMPLETED & TELEGRAM NOTIFICATION SENT!")
+        # Clear buffer to avoid double messages in Gradio forced loops
+        _telegram_console_buffer.clear()
+        print("AUTOMATED DATABASE REFRESH COMPLETED & TELEGRAM NOTIFICATION SENT!")
         print("=" * 60)
         
     except Exception as e:
