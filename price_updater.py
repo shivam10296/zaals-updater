@@ -251,18 +251,26 @@ def scrape_live_price_and_status(url):
         fetch_url = url
         active_key = get_active_scraper_key()
         
-        # Route through premium ScraperAPI if key is available, else fallback to free CORS proxy for Shein
+        # Route through premium ScraperAPI / Scrape.do if key is available
         if is_protected and active_key:
             max_retries = len(SCRAPER_API_KEYS)
             for attempt in range(max_retries):
                 current_key = get_active_scraper_key()
-                fetch_url = f"http://api.scraperapi.com?api_key={current_key}&url={urllib.parse.quote(url)}"
+                is_scrape_do = len(current_key) != 32 or current_key.lower().startswith("scrapedo:")
+                clean_key = current_key.replace("scrapedo:", "").replace("SCRAPEDO:", "")
+                
+                if is_scrape_do:
+                    fetch_url = f"https://api.scrape.do/?token={clean_key}&url={urllib.parse.quote(url)}"
+                else:
+                    fetch_url = f"https://api.scraperapi.com?api_key={clean_key}&url={urllib.parse.quote(url)}"
+                    
                 try:
-                    response = requests.get(fetch_url, headers=headers, timeout=15)
+                    # Premium rotating proxies need more time (up to 60s) to bypass strict anti-bot protections!
+                    response = requests.get(fetch_url, headers=headers, timeout=60)
                     resp_lower = response.text.lower() if response.text else ""
                     has_block = any(term in resp_lower for term in ["captcha", "robot check", "slide to verify", "verify that you are a human", "verify you are human", "security check", "access denied", "please verify"])
                     
-                    # ScraperAPI returns 403 (exceeded limits), 429 (rate limits/concurrency), or 410 (gone) for exhausted keys
+                    # ScraperAPI/Scrape.do returns 403 (exceeded limits), 429 (rate limits/concurrency), or 410 (gone) for exhausted keys
                     if response.status_code in [403, 410, 429] or has_block:
                         if rotate_scraper_key():
                             continue # Try again with the next key!
@@ -291,10 +299,17 @@ def scrape_live_price_and_status(url):
         # Automatic Proxy Fallback for 403, 503, or CAPTCHAs on other e-commerce sites!
         if response.status_code in [403, 503, 429] or "captcha" in response.text.lower() or "robot check" in response.text.lower() or "slide to verify" in response.text.lower() or "verify that you are a human" in response.text.lower():
             try:
-                proxy_url = f"https://corsproxy.io/?url={urllib.parse.quote(url)}"
+                # A. Try AllOrigins raw proxy first (high reputation, raw content, no landing page redirects)
+                proxy_url = f"https://api.allorigins.win/raw?url={urllib.parse.quote(url)}"
                 proxy_response = requests.get(proxy_url, headers=headers, timeout=15)
-                if proxy_response.status_code == 200 and "captcha" not in proxy_response.text.lower():
+                if proxy_response.status_code == 200 and "corsproxy" not in proxy_response.text.lower() and "allorigins" not in proxy_response.text.lower():
                     response = proxy_response
+                else:
+                    # B. Fallback to corsproxy.io
+                    proxy_url = f"https://corsproxy.io/?url={urllib.parse.quote(url)}"
+                    proxy_response = requests.get(proxy_url, headers=headers, timeout=15)
+                    if proxy_response.status_code == 200 and "corsproxy" not in proxy_response.text.lower():
+                        response = proxy_response
             except Exception:
                 pass
                 
@@ -312,7 +327,7 @@ def scrape_live_price_and_status(url):
             log_warning(f"Shein Diagnostic: Page Title: '{title_str}' | SSR Data: {has_ssr} | Status Code: {response.status_code}")
             
             # If the proxy returned its landing page, skip it safely!
-            if "corsproxy" in title_str.lower() or "corsproxy" in page_text.lower():
+            if "corsproxy" in title_str.lower() or "corsproxy" in page_text.lower() or "allorigins" in title_str.lower():
                 log_warning("CORS Proxy landing page returned instead of Shein page. Skipping safely.")
                 return None, "skipped"
             
