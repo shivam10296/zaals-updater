@@ -305,6 +305,12 @@ def scrape_live_price_and_status(url):
         soup = BeautifulSoup(response.content, "html.parser")
         page_text = soup.get_text()
         
+        # Shein specific diagnostic
+        if "shein." in url.lower():
+            title_str = (soup.title.text or soup.title.string or "No Title").strip()
+            has_ssr = any(x in response.text for x in ["goodsDetailV3SsrData", "goodsDetail", "goodsInfo"])
+            log_warning(f"Shein Diagnostic: Page Title: '{title_str}' | SSR Data: {has_ssr} | Status Code: {response.status_code}")
+            
         # --- A. BOT / CAPTCHA CHECK ---
         # If we hit Amazon's robot check or captcha page, skip stock block and keep active!
         if any(term in page_text.lower() for term in ["robot check", "captcha", "enter the characters you see below", "slide to verify", "verify that you are a human", "verify you are human", "security check", "access denied", "please verify"]):
