@@ -73,6 +73,29 @@ SPREADSHEET_NAME = os.getenv("SPREADSHEET_NAME", config.get("spreadsheet_name", 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", config.get("telegram_bot_token", "")).strip()
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", config.get("telegram_chat_id", "")).strip()
 
+# Dynamic Multi-Key ScraperAPI Rotation System Setup
+SCRAPER_API_KEYS_RAW = os.getenv("SCRAPER_API_KEY", config.get("scraper_api_key", "")).strip()
+# Support comma-separated, space-separated or semicolon-separated keys
+SCRAPER_API_KEYS = [k.strip() for k in re.split(r'[,\s;]+', SCRAPER_API_KEYS_RAW) if k.strip()]
+_current_key_index = 0
+
+def get_active_scraper_key():
+    global _current_key_index
+    if not SCRAPER_API_KEYS:
+        return ""
+    if _current_key_index >= len(SCRAPER_API_KEYS):
+        _current_key_index = 0
+    return SCRAPER_API_KEYS[_current_key_index]
+
+def rotate_scraper_key():
+    global _current_key_index
+    if not SCRAPER_API_KEYS or len(SCRAPER_API_KEYS) <= 1:
+        return False
+    _current_key_index = (_current_key_index + 1) % len(SCRAPER_API_KEYS)
+    log_warning(f"🔄 ScraperAPI Key limit/error detected! Rotating to Key #{_current_key_index + 1}: ...{get_active_scraper_key()[-6:]}")
+    return True
+
+
 try:
     import gspread
     from google.oauth2.service_account import Credentials
@@ -194,18 +217,40 @@ def scrape_live_price_and_status(url):
     }
     
     is_shein = "shein." in url.lower()
+    is_protected = any(domain in url.lower() for domain in ["shein.", "zara.", "hm.", "asos.", "amazon."])
     
     try:
         import urllib.parse
         fetch_url = url
-        if is_shein:
+        active_key = get_active_scraper_key()
+        
+        # Route through premium ScraperAPI if key is available, else fallback to free CORS proxy for Shein
+        if is_protected and active_key:
+            max_retries = len(SCRAPER_API_KEYS)
+            for attempt in range(max_retries):
+                current_key = get_active_scraper_key()
+                fetch_url = f"http://api.scraperapi.com?api_key={current_key}&url={urllib.parse.quote(url)}"
+                try:
+                    response = requests.get(fetch_url, headers=headers, timeout=15)
+                    # ScraperAPI returns 403 (exceeded limits), 429 (rate limits/concurrency), or 410 (gone) for exhausted keys
+                    if response.status_code in [403, 410, 429]:
+                        if rotate_scraper_key():
+                            continue # Try again with the next key!
+                    break
+                except Exception as req_err:
+                    if attempt < max_retries - 1:
+                        rotate_scraper_key()
+                        continue
+                    raise req_err
+        elif is_shein:
             # Route Shein requests through a free high-reputation CORS proxy to bypass geo-blocks!
             fetch_url = f"https://corsproxy.io/?{urllib.parse.quote(url)}"
+            response = requests.get(fetch_url, headers=headers, timeout=15)
+        else:
+            response = requests.get(fetch_url, headers=headers, timeout=15)
             
-        response = requests.get(fetch_url, headers=headers, timeout=15)
-        
-        # If the proxy failed or returned an error, fallback to direct request
-        if is_shein and response.status_code != 200:
+        # If the proxy/API failed or returned an error, fallback to direct request
+        if (is_shein or (is_protected and active_key)) and response.status_code != 200:
             fetch_url = url
             response = requests.get(fetch_url, headers=headers, timeout=15)
             
