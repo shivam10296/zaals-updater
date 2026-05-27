@@ -207,6 +207,8 @@ def scrape_live_price_and_status(url):
         soup = BeautifulSoup(response.content, "html.parser")
         
         # --- A. SEMANTIC AVAILABILITY CHECK (JSON-LD & Meta Tags) ---
+        explicit_instock = False
+        
         # 1. Check Meta Tags
         avail_meta = (
             soup.find("meta", attrs={"property": "og:availability"}) or 
@@ -218,60 +220,61 @@ def scrape_live_price_and_status(url):
             if "outofstock" in content or "out of stock" in content:
                 return None, "sold_out"
             if "instock" in content or "in stock" in content:
-                # Explicitly in stock! We can skip text matching
-                pass
+                explicit_instock = True
                 
         # 2. Check JSON-LD Schema
-        json_ld = soup.find_all("script", type="application/ld+json")
-        for script in json_ld:
-            try:
-                data = json.loads(script.string)
-                offers = None
-                if isinstance(data, dict):
-                    offers = data.get("offers")
-                elif isinstance(data, list):
-                    for item in data:
-                        if isinstance(item, dict) and "offers" in item:
-                            offers = item["offers"]
-                            break
-                if offers:
-                    if isinstance(offers, dict) and "availability" in offers:
-                        avail = str(offers["availability"]).lower()
-                        if "outofstock" in avail or "out_of_stock" in avail:
-                            return None, "sold_out"
-                        if "instock" in avail or "in_stock" in avail:
-                            # Explicitly in stock!
-                            pass
-            except Exception:
-                continue
+        if not explicit_instock:
+            json_ld = soup.find_all("script", type="application/ld+json")
+            for script in json_ld:
+                try:
+                    data = json.loads(script.string)
+                    offers = None
+                    if isinstance(data, dict):
+                        offers = data.get("offers")
+                    elif isinstance(data, list):
+                        for item in data:
+                            if isinstance(item, dict) and "offers" in item:
+                                offers = item["offers"]
+                                break
+                    if offers:
+                        if isinstance(offers, dict) and "availability" in offers:
+                            avail = str(offers["availability"]).lower()
+                            if "outofstock" in avail or "out_of_stock" in avail:
+                                return None, "sold_out"
+                            if "instock" in avail or "in_stock" in avail:
+                                explicit_instock = True
+                                break
+                except Exception:
+                    continue
 
         # --- B. SHORTENED TEXT AVAILABILITY CHECK ---
-        # Limit search to first 5000 characters to exclude customer reviews & recommendation widgets!
-        page_text = soup.get_text()
-        short_text = page_text[:5000].lower()
-        
-        # 2. Check for typical "Sold Out" or "Product Removed" patterns
-        sold_out_keywords = [
-            "product not found", 
-            "item no longer available", 
-            "page not found",
-            "this item is sold", 
-            "sold out", 
-            "out of stock",
-            "currently unavailable",
-            "temporarily out of stock"
-        ]
-        
-        # Specifically for Depop/Grailed: check if sold flags are prominent
-        platform = extract_platform_from_link(url)
-        if platform in ["Depop", "Grailed"]:
-            if re.search(r"\bsold\b", short_text):
-                return None, "sold_out"
-        else:
-            # General out of stock or product not found keywords
-            for keyword in sold_out_keywords:
-                if keyword in short_text:
+        # Limit search to first 5000 characters and ONLY run if we don't have explicit semantic InStock status!
+        if not explicit_instock:
+            page_text = soup.get_text()
+            short_text = page_text[:5000].lower()
+            
+            # Check for typical "Sold Out" or "Product Removed" patterns
+            sold_out_keywords = [
+                "product not found", 
+                "item no longer available", 
+                "page not found",
+                "this item is sold", 
+                "sold out", 
+                "out of stock",
+                "currently unavailable",
+                "temporarily out of stock"
+            ]
+            
+            # Specifically for Depop/Grailed: check if sold flags are prominent
+            platform = extract_platform_from_link(url)
+            if platform in ["Depop", "Grailed"]:
+                if re.search(r"\bsold\b", short_text):
                     return None, "sold_out"
+            else:
+                # General out of stock or product not found keywords
+                for keyword in sold_out_keywords:
+                    if keyword in short_text:
+                        return None, "sold_out"
                     
         # 3. Extract Price
         scraped_price = ""
