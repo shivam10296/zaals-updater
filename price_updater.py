@@ -307,26 +307,27 @@ def scrape_live_price_and_status(url):
         # 1. Shein Specific Script JSON Parser
         if "shein." in url.lower():
             for script in soup.find_all("script"):
-                if script.string and any(x in script.string for x in ["goodsDetailV3SsrData", "goodsDetail", "goodsInfo"]):
+                script_content = script.text or ""
+                if script_content and any(x in script_content for x in ["goodsDetailV3SsrData", "goodsDetail", "goodsInfo"]):
                     try:
                         # Find the first '{' after the variable name
                         var_idx = -1
                         for var_name in ["goodsDetailV3SsrData", "goodsDetail", "goodsInfo"]:
-                            var_idx = script.string.find(var_name)
+                            var_idx = script_content.find(var_name)
                             if var_idx != -1:
                                 break
                         
-                        start_idx = script.string.find("{", max(0, var_idx))
+                        start_idx = script_content.find("{", max(0, var_idx))
                         if start_idx != -1:
                             depth = 0
-                            for idx in range(start_idx, len(script.string)):
-                                char = script.string[idx]
+                            for idx in range(start_idx, len(script_content)):
+                                char = script_content[idx]
                                 if char == "{":
                                     depth += 1
                                 elif char == "}":
                                     depth -= 1
                                     if depth == 0:
-                                        json_str = script.string[start_idx:idx+1]
+                                        json_str = script_content[start_idx:idx+1]
                                         json_data = json.loads(json_str)
                                         candidates = find_prices_in_dict(json_data)
                                         for amt, sym in candidates:
