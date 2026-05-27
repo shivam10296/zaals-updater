@@ -200,107 +200,56 @@ def scrape_live_price_and_status(url):
         if response.status_code == 404:
             return None, "not_found"
             
-        # If server returns error codes (like rate blocks 403, 503), do not delete/block! Skip safely.
+        # If server returns error codes (like rate blocks 403, 429, 503), do not delete/block! Skip safely.
         if response.status_code in [403, 429, 500, 503]:
             return None, "skipped"
             
         soup = BeautifulSoup(response.content, "html.parser")
+        page_text = soup.get_text()
         
-        # --- A. SEMANTIC AVAILABILITY CHECK (JSON-LD & Meta Tags) ---
-        explicit_instock = False
-        
-        # 1. Check Meta Tags
-        avail_meta = (
-            soup.find("meta", attrs={"property": "og:availability"}) or 
-            soup.find("meta", attrs={"name": "availability"}) or
-            soup.find("meta", attrs={"property": "product:availability"})
-        )
-        if avail_meta and avail_meta.get("content"):
-            content = avail_meta["content"].strip().lower()
-            if "outofstock" in content or "out of stock" in content:
-                return None, "sold_out"
-            if "instock" in content or "in stock" in content:
-                explicit_instock = True
-                
-        # 2. Check JSON-LD Schema
-        if not explicit_instock:
-            json_ld = soup.find_all("script", type="application/ld+json")
-            for script in json_ld:
-                try:
-                    data = json.loads(script.string)
-                    offers = None
-                    if isinstance(data, dict):
-                        offers = data.get("offers")
-                    elif isinstance(data, list):
-                        for item in data:
-                            if isinstance(item, dict) and "offers" in item:
-                                offers = item["offers"]
-                                break
-                    if offers:
-                        if isinstance(offers, dict) and "availability" in offers:
-                            avail = str(offers["availability"]).lower()
-                            if "outofstock" in avail or "out_of_stock" in avail:
-                                return None, "sold_out"
-                            if "instock" in avail or "in_stock" in avail:
-                                explicit_instock = True
-                                break
-                except Exception:
-                    continue
-
-        # --- B. SHORTENED TEXT AVAILABILITY CHECK ---
-        # Limit search to first 5000 characters and ONLY run if we don't have explicit semantic InStock status!
-        if not explicit_instock:
-            page_text = soup.get_text()
-            short_text = page_text[:5000].lower()
+        # --- A. BOT / CAPTCHA CHECK ---
+        # If we hit Amazon's robot check or captcha page, skip stock block and keep active!
+        if "robot check" in page_text.lower() or "captcha" in page_text.lower() or "enter the characters you see below" in page_text.lower():
+            log_warning("Amazon CAPTCHA/Robot check page detected. Skipping price update safely to avoid block.")
+            return None, "active"
             
-            # Check for typical "Sold Out" or "Product Removed" patterns
-            sold_out_keywords = [
-                "product not found", 
-                "item no longer available", 
-                "page not found",
-                "this item is sold", 
-                "sold out", 
-                "out of stock",
-                "currently unavailable",
-                "temporarily out of stock"
-            ]
-            
-            # Specifically for Depop/Grailed: check if sold flags are prominent
-            platform = extract_platform_from_link(url)
-            if platform in ["Depop", "Grailed"]:
-                if re.search(r"\bsold\b", short_text):
-                    return None, "sold_out"
-            else:
-                # General out of stock or product not found keywords
-                for keyword in sold_out_keywords:
-                    if keyword in short_text:
-                        return None, "sold_out"
-                    
-        # 3. Extract Price
+        # --- B. PRICE EXTRACTION ---
         scraped_price = ""
         
-        # A. Search meta elements
-        meta_selectors = [
-            ("property", "og:price:amount"),
-            ("property", "product:price:amount"),
-            ("name", "twitter:data1"),
-            ("itemprop", "price")
-        ]
-        for attr, val in meta_selectors:
-            meta = soup.find("meta", attrs={attr: val})
-            if meta and meta.get("content"):
-                scraped_price = meta["content"].strip()
-                curr_meta = soup.find("meta", attrs={"property": "og:price:currency"}) or soup.find("meta", attrs={"property": "product:price:currency"})
-                curr = curr_meta["content"].strip() if (curr_meta and curr_meta.get("content")) else "$"
-                if curr == "USD" or curr == "$":
-                    scraped_price = f"${scraped_price}"
-                elif curr == "INR" or curr == "Rs.":
-                    scraped_price = f"₹{scraped_price}"
-                else:
-                    scraped_price = f"{curr} {scraped_price}"
-                break
-        
-        # B. Search JSON-LD
+        # 1. Platform Specific Selectors (Amazon)
+        if "amazon." in url.lower():
+            for selector in ["span.a-price span.a-offscreen", "span#price_inside_buybox", "span.apexPriceToPay span.a-offscreen", "span#price"]:
+                el = soup.select_one(selector)
+                if el:
+                    text = el.get_text().strip()
+                    match = re.search(r"([$₹£€]\s*\d+([.,]\d{2})?)", text)
+                    if match:
+                        scraped_price = match.group(1).replace(" ", "")
+                        break
+                        
+        # 2. General Meta Selectors
+        if not scraped_price:
+            meta_selectors = [
+                ("property", "og:price:amount"),
+                ("property", "product:price:amount"),
+                ("name", "twitter:data1"),
+                ("itemprop", "price")
+            ]
+            for attr, val in meta_selectors:
+                meta = soup.find("meta", attrs={attr: val})
+                if meta and meta.get("content"):
+                    scraped_price = meta["content"].strip()
+                    curr_meta = soup.find("meta", attrs={"property": "og:price:currency"}) or soup.find("meta", attrs={"property": "product:price:currency"})
+                    curr = curr_meta["content"].strip() if (curr_meta and curr_meta.get("content")) else "$"
+                    if curr == "USD" or curr == "$":
+                        scraped_price = f"${scraped_price}"
+                    elif curr == "INR" or curr == "Rs.":
+                        scraped_price = f"₹{scraped_price}"
+                    else:
+                        scraped_price = f"{curr} {scraped_price}"
+                    break
+                    
+        # 3. General JSON-LD
         if not scraped_price:
             json_ld = soup.find_all("script", type="application/ld+json")
             for script in json_ld:
@@ -323,7 +272,7 @@ def scrape_live_price_and_status(url):
                 except Exception:
                     continue
                     
-        # C. Regex patterns on price tags
+        # 4. General Regex price extraction
         if not scraped_price:
             price_elements = soup.find_all(class_=re.compile("price|amount|val", re.IGNORECASE))
             for el in price_elements:
@@ -333,8 +282,66 @@ def scrape_live_price_and_status(url):
                     scraped_price = match.group(1).replace(" ", "")
                     break
                     
+        # --- C. STOCK STATUS RESOLVER ---
+        # RULE 1: If we successfully extracted a price, the item MUST be active!
         if scraped_price:
             return scraped_price, "active"
+            
+        # RULE 2: If no price is found, check semantic metadata for sold-out flags
+        avail_meta = (
+            soup.find("meta", attrs={"property": "og:availability"}) or 
+            soup.find("meta", attrs={"name": "availability"}) or
+            soup.find("meta", attrs={"property": "product:availability"})
+        )
+        if avail_meta and avail_meta.get("content"):
+            content = avail_meta["content"].strip().lower()
+            if "outofstock" in content or "out of stock" in content:
+                return None, "sold_out"
+                
+        # RULE 3: Check JSON-LD offers availability
+        json_ld = soup.find_all("script", type="application/ld+json")
+        for script in json_ld:
+            try:
+                data = json.loads(script.string)
+                offers = None
+                if isinstance(data, dict):
+                    offers = data.get("offers")
+                elif isinstance(data, list):
+                    for item in data:
+                        if isinstance(item, dict) and "offers" in item:
+                            offers = item["offers"]
+                            break
+                if offers:
+                    if isinstance(offers, dict) and "availability" in offers:
+                        avail = str(offers["availability"]).lower()
+                        if "outofstock" in avail or "out_of_stock" in avail:
+                            return None, "sold_out"
+            except Exception:
+                continue
+                
+        # RULE 4: Fallback to text checks (first 5,000 chars)
+        short_text = page_text[:5000].lower()
+        sold_out_keywords = [
+            "product not found", 
+            "item no longer available", 
+            "page not found",
+            "this item is sold", 
+            "sold out", 
+            "out of stock",
+            "currently unavailable",
+            "temporarily out of stock"
+        ]
+        
+        platform = extract_platform_from_link(url)
+        if platform in ["Depop", "Grailed"]:
+            if re.search(r"\bsold\b", short_text):
+                return None, "sold_out"
+        else:
+            for keyword in sold_out_keywords:
+                if keyword in short_text:
+                    return None, "sold_out"
+                    
+        # If no sold out keywords matched and we just couldn't parse the price, keep active!
         return None, "active"
         
     except Exception as e:
