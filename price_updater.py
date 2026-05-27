@@ -214,8 +214,7 @@ def scrape_live_price_and_status(url):
             "page not found",
             "this item is sold", 
             "sold out", 
-            "out of stock",
-            "sold" # Depop/Grailed specific standard
+            "out of stock"
         ]
         
         # Specifically for Depop/Grailed: check if sold flags are prominent
