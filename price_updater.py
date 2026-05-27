@@ -210,7 +210,7 @@ def find_prices_in_dict(d, found=None):
         found = []
     if isinstance(d, dict):
         # Direct check on this dict
-        amount = d.get("amount") or d.get("usdAmount") or d.get("retailPrice") or d.get("salePrice")
+        amount = d.get("amount") or d.get("usdAmount") or d.get("usd_amount") or d.get("retailPrice") or d.get("salePrice") or d.get("value") or d.get("price")
         if amount and isinstance(amount, (int, float, str)) and not isinstance(amount, bool):
             symbol = d.get("amountWithSymbol") or d.get("symbol") or d.get("currency") or "$"
             found.append((str(amount), str(symbol)))
@@ -218,7 +218,7 @@ def find_prices_in_dict(d, found=None):
         for k, v in d.items():
             if isinstance(v, (dict, list)):
                 find_prices_in_dict(v, found)
-            elif k.lower() in ["price", "saleprice", "retailprice", "unitprice", "amount"] and isinstance(v, (int, float, str)) and not isinstance(v, bool):
+            elif k.lower() in ["price", "saleprice", "retailprice", "unitprice", "amount", "sale_price", "retail_price", "originalprice", "original_price", "usdprice", "usd_price", "usd_amount", "usdamount"] and isinstance(v, (int, float, str)) and not isinstance(v, bool):
                 found.append((str(v), k))
     elif isinstance(d, list):
         for item in d:
@@ -309,24 +309,41 @@ def scrape_live_price_and_status(url):
             for script in soup.find_all("script"):
                 if script.string and any(x in script.string for x in ["goodsDetailV3SsrData", "goodsDetail", "goodsInfo"]):
                     try:
-                        match = re.search(r'(?:goodsDetailV3SsrData|goodsDetail|goodsInfo)\s*=\s*(\{.*?\})(?:\s*;|\s*\n|\s*</script>)', script.string, re.DOTALL)
-                        if not match:
-                            match = re.search(r'=\s*(\{.*?\});', script.string, re.DOTALL)
-                        if match:
-                            json_data = json.loads(match.group(1))
-                            candidates = find_prices_in_dict(json_data)
-                            for amt, sym in candidates:
-                                amt_clean = re.sub(r"[^\d.]", "", amt)
-                                if amt_clean:
-                                    curr = "$"
-                                    if "₹" in sym or "inr" in sym.lower():
-                                        curr = "₹"
-                                    elif "£" in sym or "gbp" in sym.lower():
-                                        curr = "£"
-                                    elif "€" in sym or "eur" in sym.lower():
-                                        curr = "€"
-                                    scraped_price = f"{curr}{amt_clean}"
-                                    break
+                        # Find the first '{' after the variable name
+                        var_idx = -1
+                        for var_name in ["goodsDetailV3SsrData", "goodsDetail", "goodsInfo"]:
+                            var_idx = script.string.find(var_name)
+                            if var_idx != -1:
+                                break
+                        
+                        start_idx = script.string.find("{", max(0, var_idx))
+                        if start_idx != -1:
+                            depth = 0
+                            for idx in range(start_idx, len(script.string)):
+                                char = script.string[idx]
+                                if char == "{":
+                                    depth += 1
+                                elif char == "}":
+                                    depth -= 1
+                                    if depth == 0:
+                                        json_str = script.string[start_idx:idx+1]
+                                        json_data = json.loads(json_str)
+                                        candidates = find_prices_in_dict(json_data)
+                                        for amt, sym in candidates:
+                                            if sym in ["productId", "goodsId", "id", "skuId"]:
+                                                continue
+                                            amt_clean = re.sub(r"[^\d.]", "", amt)
+                                            if amt_clean and len(amt_clean) < 10:
+                                                curr = "$"
+                                                if "₹" in sym or "inr" in sym.lower():
+                                                    curr = "₹"
+                                                elif "£" in sym or "gbp" in sym.lower():
+                                                    curr = "£"
+                                                elif "€" in sym or "eur" in sym.lower():
+                                                    curr = "€"
+                                                scraped_price = f"{curr}{amt_clean}"
+                                                break
+                                        break
                             if scraped_price:
                                 break
                     except Exception as parse_err:
