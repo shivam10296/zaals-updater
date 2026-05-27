@@ -349,7 +349,25 @@ def scrape_live_price_and_status(url):
                     except Exception as parse_err:
                         log_warning(f"Error parsing Shein JSON: {parse_err}")
         
-        # 2. Platform Specific Selectors (Amazon)
+        # 2. Direct Tracking Attribute Search (e.g. data-goods_ga_price in Shein, data-price)
+        if not scraped_price:
+            for el in soup.find_all(lambda tag: tag.has_attr('data-goods_ga_price') or tag.has_attr('data-price') or tag.has_attr('data-goods-price')):
+                val = el.get('data-goods_ga_price') or el.get('data-price') or el.get('data-goods-price')
+                if val:
+                    val_str = str(val).strip()
+                    amt_clean = re.sub(r"[^\d.]", "", val_str)
+                    if amt_clean and len(amt_clean) < 10:
+                        curr = "$"
+                        if "₹" in page_text or "INR" in page_text:
+                            curr = "₹"
+                        elif "£" in page_text or "GBP" in page_text:
+                            curr = "£"
+                        elif "€" in page_text or "EUR" in page_text:
+                            curr = "€"
+                        scraped_price = f"{curr}{amt_clean}"
+                        break
+        
+        # 3. Platform Specific Selectors (Amazon)
         if not scraped_price and "amazon." in url.lower():
             for selector in ["span.a-price span.a-offscreen", "span#price_inside_buybox", "span.apexPriceToPay span.a-offscreen", "span#price"]:
                 el = soup.select_one(selector)
@@ -360,7 +378,7 @@ def scrape_live_price_and_status(url):
                         scraped_price = match.group(1).replace(" ", "")
                         break
                         
-        # 3. General Meta Selectors
+        # 4. General Meta Selectors
         if not scraped_price:
             meta_selectors = [
                 ("property", "og:price:amount"),
