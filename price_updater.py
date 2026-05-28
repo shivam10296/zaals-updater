@@ -262,13 +262,13 @@ def scrape_live_price_and_status(url):
                 if is_scrape_do:
                     fetch_url = f"https://api.scrape.do/?token={clean_key}&url={urllib.parse.quote(url)}"
                     if "shein." in url.lower():
-                        # Force US proxies for Shein to prevent regional homepage redirects!
-                        fetch_url += "&geo=us"
+                        # Force US proxies, JS rendering, and 5s load delay for Shein!
+                        fetch_url += "&geo=us&render=true&customWait=5000"
                 else:
                     fetch_url = f"https://api.scraperapi.com?api_key={clean_key}&url={urllib.parse.quote(url)}"
                     if "shein." in url.lower():
-                        # Force US proxies for Shein to prevent regional homepage redirects!
-                        fetch_url += "&country_code=us"
+                        # Force US proxies, JS rendering, and 5s load delay for Shein!
+                        fetch_url += "&country_code=us&render=true&wait_for=5000"
                     
                 try:
                     # Premium rotating proxies need more time (up to 60s) to bypass strict anti-bot protections!
