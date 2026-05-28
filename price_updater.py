@@ -216,17 +216,20 @@ def find_prices_in_dict(d, found=None):
     if found is None:
         found = []
     if isinstance(d, dict):
-        # Direct check on this dict
-        amount = d.get("amount") or d.get("usdAmount") or d.get("usd_amount") or d.get("retailPrice") or d.get("salePrice") or d.get("value") or d.get("price")
-        if amount and isinstance(amount, (int, float, str)) and not isinstance(amount, bool):
-            symbol = d.get("amountWithSymbol") or d.get("symbol") or d.get("currency") or "$"
-            found.append((str(amount), str(symbol)))
+        # Highly precise Shein price targets to avoid matching dimensions, weight, height, or sizes!
+        for key in ["salePrice", "retailPrice", "priceInfo", "usdPrice", "usd_price", "originalPrice", "original_price", "goods_ga_price", "ga_price"]:
+            val = d.get(key)
+            if val and isinstance(val, dict):
+                amount = val.get("amount") or val.get("usdAmount") or val.get("usd_amount") or val.get("value") or val.get("price")
+                if amount and isinstance(amount, (int, float, str)) and not isinstance(amount, bool):
+                    symbol = val.get("amountWithSymbol") or val.get("symbol") or val.get("currency") or val.get("priceCurrency") or "$"
+                    found.append((str(amount), str(symbol)))
+            elif val and isinstance(val, (int, float, str)) and not isinstance(val, bool):
+                found.append((str(val), key))
             
         for k, v in d.items():
             if isinstance(v, (dict, list)):
                 find_prices_in_dict(v, found)
-            elif k.lower() in ["price", "saleprice", "retailprice", "unitprice", "amount", "sale_price", "retail_price", "originalprice", "original_price", "usdprice", "usd_price", "usd_amount", "usdamount"] and isinstance(v, (int, float, str)) and not isinstance(v, bool):
-                found.append((str(v), k))
     elif isinstance(d, list):
         for item in d:
             find_prices_in_dict(item, found)
